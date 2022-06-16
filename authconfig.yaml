@@ -1,0 +1,19 @@
+apiVersion: authorino.kuadrant.io/v1beta1
+kind: AuthConfig
+metadata:
+  name: talker-api-protection
+spec:
+  hosts:
+  - talker-api-authorino.127.0.0.1.nip.io
+  identity:
+  - name: mtls
+    mtls:
+      labelSelectors:
+        app: talker-api
+  authorization:
+  - name: acme
+    json:
+      rules:
+      - selector: auth.identity.Organization
+        operator: incl
+        value: ACME Inc.

@@ -1,0 +1,179 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  labels:
+    app: envoy
+  name: envoy
+data:
+  envoy.yaml: |
+    static_resources:
+      listeners:
+      - address:
+          socket_address:
+            address: 0.0.0.0
+            port_value: 8000
+        filter_chains:
+        - transport_socket:
+            name: envoy.transport_sockets.tls
+            typed_config:
+              "@type": type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.DownstreamTlsContext
+              common_tls_context:
+                tls_certificates:
+                - certificate_chain: {filename: "/etc/ssl/certs/talker-api/tls.crt"}
+                  private_key: {filename: "/etc/ssl/certs/talker-api/tls.key"}
+                validation_context:
+                  trusted_ca:
+                    filename: /etc/ssl/certs/talker-api/tls.crt
+          filters:
+          - name: envoy.http_connection_manager
+            typed_config:
+              "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
+              stat_prefix: local
+              route_config:
+                name: local_route
+                virtual_hosts:
+                - name: local_service
+                  domains: ['*']
+                  routes:
+                  - match: { prefix: / }
+                    route: { cluster: talker-api }
+              http_filters:
+              - name: envoy.filters.http.ext_authz
+                typed_config:
+                  "@type": type.googleapis.com/envoy.extensions.filters.http.ext_authz.v3.ExtAuthz
+                  transport_api_version: V3
+                  failure_mode_allow: false
+                  include_peer_certificate: true
+                  grpc_service:
+                    envoy_grpc: { cluster_name: authorino }
+                    timeout: 1s
+              - name: envoy.filters.http.router
+                typed_config: {}
+              use_remote_address: true
+      clusters:
+      - name: authorino
+        connect_timeout: 0.25s
+        type: strict_dns
+        lb_policy: round_robin
+        http2_protocol_options: {}
+        load_assignment:
+          cluster_name: authorino
+          endpoints:
+          - lb_endpoints:
+            - endpoint:
+                address:
+                  socket_address:
+                    address: authorino-authorino-authorization
+                    port_value: 50051
+        transport_socket:
+          name: envoy.transport_sockets.tls
+          typed_config:
+            "@type": type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.UpstreamTlsContext
+            common_tls_context:
+              validation_context:
+                trusted_ca:
+                  filename: /etc/ssl/certs/authorino-ca-cert.crt
+      - name: talker-api
+        connect_timeout: 0.25s
+        type: strict_dns
+        lb_policy: round_robin
+        load_assignment:
+          cluster_name: talker-api
+          endpoints:
+          - lb_endpoints:
+            - endpoint:
+                address:
+                  socket_address:
+                    address: talker-api
+                    port_value: 3000
+    admin:
+      access_log_path: "/tmp/admin_access.log"
+      address:
+        socket_address:
+          address: 0.0.0.0
+          port_value: 8001
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app: envoy
+  name: envoy
+spec:
+  selector:
+    matchLabels:
+      app: envoy
+  template:
+    metadata:
+      labels:
+        app: envoy
+    spec:
+      containers:
+      - args:
+        - --config-path /usr/local/etc/envoy/envoy.yaml
+        - --service-cluster front-proxy
+        - --log-level info
+        - --component-log-level filter:trace,http:debug,router:debug
+        command:
+        - /usr/local/bin/envoy
+        image: envoyproxy/envoy:v1.19-latest
+        name: envoy
+        ports:
+        - containerPort: 8000
+          name: web
+        - containerPort: 8001
+          name: admin
+        volumeMounts:
+        - mountPath: /usr/local/etc/envoy
+          name: config
+          readOnly: true
+        - mountPath: /etc/ssl/certs/authorino-ca-cert.crt
+          name: authorino-ca-cert
+          readOnly: true
+          subPath: ca.crt
+        - mountPath: /etc/ssl/certs/talker-api
+          name: talker-api-ca
+          readOnly: true
+      volumes:
+      - configMap:
+          items:
+          - key: envoy.yaml
+            path: envoy.yaml
+          name: envoy
+        name: config
+      - name: authorino-ca-cert
+        secret:
+          defaultMode: 420
+          secretName: authorino-ca-cert
+      - name: talker-api-ca
+        secret:
+          defaultMode: 420
+          secretName: talker-api-ca
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: envoy
+spec:
+  selector:
+    app: envoy
+  ports:
+  - name: web
+    port: 8000
+    protocol: TCP
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: ingress-wildcard-host
+spec:
+  rules:
+  - host: talker-api-authorino.127.0.0.1.nip.io
+    http:
+      paths:
+      - backend:
+          service:
+            name: envoy
+            port: { number: 8000 }
+        path: /
+        pathType: Prefix
