@@ -483,8 +483,9 @@ curl -k --cert /tmp/mtls/john.crt --key /tmp/mtls/john.key https://talker-api-au
 
 Notice that Envoy still accepts John's client certificate.
 
-## Cleanup ([▶︎](didact://?commandId=vscode.didact.sendNamedTerminalAString&text=demo$$kind%20delete%20cluster%20--name%20authorino-demo))
+## Cleanup ([▶︎](didact://?commandId=vscode.didact.sendNamedTerminalAString&text=demo$$kind%20delete%20cluster%20--name%20authorino-demo%0Arm%20-rf%20/tmp/mtls))
 
 ```sh
 kind delete cluster --name authorino-demo
+rm -rf /tmp/mtls
 ```
